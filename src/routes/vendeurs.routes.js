@@ -86,6 +86,53 @@ router.get('/:nomEntreprise/:id/connexions', authentifier, exigerRole('gerant'),
   res.json(historique);
 });
 
+// PUT /api/vendeurs/moi : le VENDEUR CONNECTÉ modifie SON PROPRE
+// profil (nom, email, téléphone) et éventuellement son propre mot de
+// passe — vérifié par SON PROPRE mot de passe actuel (jamais celui du
+// gérant, contrairement à PUT /:id ci-dessous qui est réservé au
+// gérant). IMPORTANT : cette route doit rester déclarée AVANT
+// "PUT /:id", sinon Express confondrait "moi" avec un id de vendeur.
+router.put('/moi', authentifier, exigerRole('vendeur'), async (req, res) => {
+  const vendeur = await prisma.vendeur.findUnique({ where: { id: req.utilisateur.vendeurId } });
+  if (!vendeur) {
+    return res.status(404).json({ erreur: 'Vendeur introuvable.' });
+  }
+
+  const { nomPrenoms, email, telephone, motDePasseActuel, nouveauMotDePasse } = req.body;
+
+  if (!motDePasseActuel) {
+    return res.status(400).json({ erreur: 'Merci de saisir votre mot de passe pour valider.' });
+  }
+
+  const motDePasseOk = await bcrypt.compare(motDePasseActuel, vendeur.motDePasseHash);
+  if (!motDePasseOk) {
+    return res.status(401).json({ erreur: 'Mot de passe incorrect.' });
+  }
+
+  const donnees = {};
+  if (nomPrenoms !== undefined) donnees.nomPrenoms = nomPrenoms;
+  if (email !== undefined) donnees.email = email;
+  if (telephone !== undefined) donnees.telephone = telephone;
+
+  if (nouveauMotDePasse) {
+    donnees.motDePasseHash = await bcrypt.hash(nouveauMotDePasse, 10);
+    // À partir de maintenant, le gérant ne pourra plus réinitialiser
+    // ce mot de passe ni s'en servir pour "Connecter un vendeur" —
+    // seul le vendeur lui-même y a accès (voir PUT /:id ci-dessous).
+    donnees.motDePassePersonnalise = true;
+  }
+
+  const misAJour = await prisma.vendeur.update({ where: { id: vendeur.id }, data: donnees });
+
+  res.json({
+    id: misAJour.id,
+    nomPrenoms: misAJour.nomPrenoms,
+    email: misAJour.email,
+    telephone: misAJour.telephone,
+    motDePassePersonnalise: misAJour.motDePassePersonnalise,
+  });
+});
+
 // PUT /api/vendeurs/:id : modifie le profil d'un vendeur (nom,
 // email, téléphone) et, en option, réinitialise son mot de passe.
 // Réservé au gérant, protégé par SON propre mot de passe (vérifié
